@@ -81,22 +81,98 @@
     queue: [],
     isSpeaking: false,
     speed: 1.0,
+    pitch: 1.0,
     autoPlay: true,
     synthesis: window.speechSynthesis,
+    selectedVoice: null,
+    voices: [],
     statusEl: null,
     statusTextEl: null,
     queueCountEl: null,
-    MAX_QUEUE: 3, // Aggressive skip to stay current
+    MAX_QUEUE: 3,
 
     init() {
       this.statusEl = document.getElementById('tts-status');
       this.statusTextEl = document.getElementById('tts-status-text');
       this.queueCountEl = document.getElementById('tts-queue-count');
+
+      // Load available voices
+      this._loadVoices();
+      // Chrome needs onvoiceschanged
+      this.synthesis.onvoiceschanged = () => this._loadVoices();
+    },
+
+    _loadVoices() {
+      this.voices = this.synthesis.getVoices();
+      const select = document.getElementById('voice-select');
+      if (!select || this.voices.length === 0) return;
+
+      // Clear existing options
+      select.innerHTML = '<option value="">自動（最適な音声を選択）</option>';
+
+      // Group voices by language
+      const langGroups = {
+        'ja': { label: '🇯🇵 日本語', voices: [] },
+        'en': { label: '🇺🇸 English', voices: [] },
+        'ko': { label: '🇰🇷 한국어', voices: [] },
+        'fr': { label: '🇫🇷 Français', voices: [] }
+      };
+
+      this.voices.forEach((voice, idx) => {
+        const langCode = voice.lang.substring(0, 2);
+        if (langGroups[langCode]) {
+          // Prioritize natural/online voices
+          const isNatural = voice.name.includes('Natural') || voice.name.includes('Online') || voice.name.includes('Neural');
+          langGroups[langCode].voices.push({ voice, idx, isNatural });
+        }
+      });
+
+      // Create optgroups
+      Object.entries(langGroups).forEach(([code, group]) => {
+        if (group.voices.length === 0) return;
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = group.label;
+
+        // Sort: natural voices first
+        group.voices.sort((a, b) => (b.isNatural ? 1 : 0) - (a.isNatural ? 1 : 0));
+
+        group.voices.forEach(({ voice, idx, isNatural }) => {
+          const option = document.createElement('option');
+          option.value = idx;
+          option.textContent = `${isNatural ? '⭐ ' : ''}${voice.name}`;
+          optgroup.appendChild(option);
+        });
+
+        select.appendChild(optgroup);
+      });
+    },
+
+    // Find best voice for a given language
+    _getBestVoice(lang) {
+      if (this.selectedVoice) return this.selectedVoice;
+
+      const langCode = lang.substring(0, 2);
+      // Prefer natural/neural voices
+      const natural = this.voices.find(v =>
+        v.lang.startsWith(langCode) &&
+        (v.name.includes('Natural') || v.name.includes('Online') || v.name.includes('Neural'))
+      );
+      if (natural) return natural;
+
+      // Fallback to any matching voice
+      return this.voices.find(v => v.lang.startsWith(langCode)) || null;
+    },
+
+    setVoice(voiceIndex) {
+      if (voiceIndex === '' || voiceIndex === null) {
+        this.selectedVoice = null; // Auto mode
+      } else {
+        this.selectedVoice = this.voices[parseInt(voiceIndex)] || null;
+      }
     },
 
     enqueue(text, lang) {
       if (!this.autoPlay || !text.trim()) return;
-      // Drop oldest items if queue is overflowing (can't keep up)
       while (this.queue.length >= this.MAX_QUEUE) {
         const skipped = this.queue.shift();
         console.warn('TTS queue overflow, skipping:', skipped.text.substring(0, 30));
@@ -109,7 +185,6 @@
     processNext() {
       if (this.queue.length === 0) {
         this.isSpeaking = false;
-        // Restore source audio to USER-SET volume (not 100%)
         SpeechManager.restoreUserVolume();
         this.updateUI();
         return;
@@ -118,16 +193,18 @@
       const { text, lang } = this.queue.shift();
       this.updateUI();
 
-      // AUTO-DUCK: Lower source audio while TTS speaks
       SpeechManager.duckVolume();
-
       this.synthesis.cancel();
 
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = lang;
       utterance.rate = this.speed;
-      utterance.pitch = 1.0;
+      utterance.pitch = this.pitch;
       utterance.volume = 1.0;
+
+      // Apply selected or best voice
+      const voice = this._getBestVoice(lang);
+      if (voice) utterance.voice = voice;
 
       utterance.onend = () => {
         setTimeout(() => this.processNext(), 100);
@@ -148,9 +225,8 @@
       this.updateUI();
     },
 
-    setSpeed(val) {
-      this.speed = val;
-    },
+    setSpeed(val) { this.speed = val; },
+    setPitch(val) { this.pitch = val; },
 
     toggleAuto() {
       this.autoPlay = !this.autoPlay;
@@ -700,13 +776,18 @@
       document.getElementById('btn-engine-native').addEventListener('click', () => this.setEngine('native'));
       document.getElementById('btn-engine-whisper').addEventListener('click', () => this.setEngine('whisper'));
 
+      // Voice selector
+      document.getElementById('voice-select').addEventListener('change', (e) => {
+        TTSManager.setVoice(e.target.value);
+      });
+
       // Source volume slider (for tab audio)
       const srcVolSlider = document.getElementById('source-volume');
       const srcVolValue = document.getElementById('source-volume-value');
       srcVolSlider.addEventListener('input', () => {
         const val = parseFloat(srcVolSlider.value);
         srcVolValue.textContent = `${Math.round(val * 100)}%`;
-        SpeechManager.setSourceVolume(val); // This also updates userVolume
+        SpeechManager.setSourceVolume(val);
       });
 
       // Speed slider
@@ -716,6 +797,15 @@
         const val = parseFloat(speedSlider.value);
         speedValue.textContent = `${val.toFixed(1)}x`;
         TTSManager.setSpeed(val);
+      });
+
+      // Pitch slider
+      const pitchSlider = document.getElementById('pitch-slider');
+      const pitchValue = document.getElementById('pitch-value');
+      pitchSlider.addEventListener('input', () => {
+        const val = parseFloat(pitchSlider.value);
+        pitchValue.textContent = val.toFixed(1);
+        TTSManager.setPitch(val);
       });
 
       // Auto TTS toggle

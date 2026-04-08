@@ -107,6 +107,12 @@
         <div class="audio-level__bars" id="audio-bars"></div>
       </div>
       <div class="control-settings">
+        <div class="setting-item setting-item--wide">
+          <label for="voice-select">読み上げ音声</label>
+          <select class="voice-select" id="voice-select">
+            <option value="">自動選択</option>
+          </select>
+        </div>
         <div class="setting-item">
           <label for="source-volume">元音声</label>
           <input type="range" class="speed-slider" id="source-volume" min="0" max="1.0" step="0.05" value="0.5">
@@ -116,6 +122,11 @@
           <label for="speed-slider">読み上げ速度</label>
           <input type="range" class="speed-slider" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0">
           <span class="speed-value" id="speed-value">1.0x</span>
+        </div>
+        <div class="setting-item">
+          <label for="pitch-slider">声の高さ</label>
+          <input type="range" class="speed-slider" id="pitch-slider" min="0.5" max="1.5" step="0.1" value="1.0">
+          <span class="speed-value" id="pitch-value">1.0</span>
         </div>
         <div class="setting-item">
           <label>自動読み上げ</label>
