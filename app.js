@@ -86,7 +86,7 @@
     statusEl: null,
     statusTextEl: null,
     queueCountEl: null,
-    MAX_QUEUE: 5, // Skip old items if queue gets too long
+    MAX_QUEUE: 3, // Aggressive skip to stay current
 
     init() {
       this.statusEl = document.getElementById('tts-status');
@@ -109,8 +109,8 @@
     processNext() {
       if (this.queue.length === 0) {
         this.isSpeaking = false;
-        // Restore source audio volume (un-duck)
-        SpeechManager.setSourceVolume(1.0);
+        // Restore source audio to USER-SET volume (not 100%)
+        SpeechManager.restoreUserVolume();
         this.updateUI();
         return;
       }
@@ -119,7 +119,7 @@
       this.updateUI();
 
       // AUTO-DUCK: Lower source audio while TTS speaks
-      SpeechManager.setSourceVolume(0.1);
+      SpeechManager.duckVolume();
 
       this.synthesis.cancel();
 
@@ -130,11 +130,11 @@
       utterance.volume = 1.0;
 
       utterance.onend = () => {
-        setTimeout(() => this.processNext(), 150);
+        setTimeout(() => this.processNext(), 100);
       };
       utterance.onerror = (e) => {
         console.error('TTS error:', e);
-        setTimeout(() => this.processNext(), 150);
+        setTimeout(() => this.processNext(), 100);
       };
 
       this.synthesis.speak(utterance);
@@ -144,7 +144,7 @@
       this.synthesis.cancel();
       this.queue = [];
       this.isSpeaking = false;
-      SpeechManager.setSourceVolume(1.0);
+      SpeechManager.restoreUserVolume();
       this.updateUI();
     },
 
@@ -404,10 +404,28 @@
       }
     },
 
-    // Volume control for source audio (used by auto-ducking)
+    // User-set volume level (the slider value)
+    userVolume: 0.5,
+
+    // Set volume directly (used by slider)
     setSourceVolume(vol) {
+      this.userVolume = vol;
       if (this.tabGainNode) {
-        this.tabGainNode.gain.setTargetAtTime(vol, this.tabAudioContext.currentTime, 0.1);
+        this.tabGainNode.gain.setTargetAtTime(vol, this.tabAudioContext.currentTime, 0.08);
+      }
+    },
+
+    // Duck to near-silence (used by TTS auto-ducking)
+    duckVolume() {
+      if (this.tabGainNode) {
+        this.tabGainNode.gain.setTargetAtTime(0.05, this.tabAudioContext.currentTime, 0.08);
+      }
+    },
+
+    // Restore to user-set volume (after TTS ends)
+    restoreUserVolume() {
+      if (this.tabGainNode) {
+        this.tabGainNode.gain.setTargetAtTime(this.userVolume, this.tabAudioContext.currentTime, 0.15);
       }
     },
 
@@ -510,13 +528,13 @@
       document.getElementById('source-lang').addEventListener('change', () => this.updateBadges());
       document.getElementById('target-lang').addEventListener('change', () => this.updateBadges());
 
-      // Source volume slider (for tab audio ducking)
+      // Source volume slider (for tab audio)
       const srcVolSlider = document.getElementById('source-volume');
       const srcVolValue = document.getElementById('source-volume-value');
       srcVolSlider.addEventListener('input', () => {
         const val = parseFloat(srcVolSlider.value);
         srcVolValue.textContent = `${Math.round(val * 100)}%`;
-        SpeechManager.setSourceVolume(val);
+        SpeechManager.setSourceVolume(val); // This also updates userVolume
       });
 
       // Speed slider
@@ -621,6 +639,12 @@
       Toast.show('翻訳を停止しました', 'info');
     },
 
+    // Translation request counter to skip stale results
+    _translationId: 0,
+    _pendingTranslations: 0,
+    _batchBuffer: '',
+    _batchTimer: null,
+
     async onSpeechResult(finalText, interim) {
       const sourceContentEl = document.getElementById('source-content');
       const translationContentEl = document.getElementById('translation-content');
@@ -640,43 +664,65 @@
       sourceContentEl.innerHTML = html;
       sourceContentEl.scrollTop = sourceContentEl.scrollHeight;
 
-      // Translate final text
+      // Batch final texts and translate with debounce
       if (finalText.trim()) {
         this.sourceText += finalText + ' ';
+        this._batchBuffer += finalText.trim() + ' ';
 
-        const srcSelect = document.getElementById('source-lang');
-        const tgtSelect = document.getElementById('target-lang');
-        const srcLangCode = srcSelect.options[srcSelect.selectedIndex].dataset.translate;
-        const tgtLangCode = tgtSelect.options[tgtSelect.selectedIndex].dataset.translate;
-        const tgtSpeechLang = tgtSelect.value;
-
-        const translated = await TranslationManager.translate(finalText.trim(), srcLangCode, tgtLangCode);
-
-        // Show translation
-        translationContentEl.classList.remove('panel__content--empty');
-        const existingTranslation = translationContentEl.querySelector('.text-translated:last-child');
-        const span = document.createElement('span');
-        span.className = 'text-translated';
-        span.textContent = translated + ' ';
-
-        if (translationContentEl.querySelector('.panel__content--empty') || translationContentEl.textContent === '翻訳結果がここに表示されます') {
-          translationContentEl.innerHTML = '';
-        }
-        translationContentEl.appendChild(span);
-        translationContentEl.scrollTop = translationContentEl.scrollHeight;
-
-        // TTS
-        TTSManager.enqueue(translated, tgtSpeechLang);
-
-        // Log
-        LogManager.add(finalText.trim(), translated, srcSelect.value, tgtSelect.value);
-
-        // Activate translation panel
-        document.getElementById('translation-panel').classList.add('panel--active');
-        setTimeout(() => {
-          document.getElementById('translation-panel').classList.remove('panel--active');
-        }, 2000);
+        // Debounce: wait 400ms for more text before translating
+        // This batches rapid-fire recognition results
+        clearTimeout(this._batchTimer);
+        this._batchTimer = setTimeout(() => this._flushTranslation(), 400);
       }
+    },
+
+    async _flushTranslation() {
+      const textToTranslate = this._batchBuffer.trim();
+      this._batchBuffer = '';
+      if (!textToTranslate) return;
+
+      const myId = ++this._translationId;
+      this._pendingTranslations++;
+
+      const srcSelect = document.getElementById('source-lang');
+      const tgtSelect = document.getElementById('target-lang');
+      const srcLangCode = srcSelect.options[srcSelect.selectedIndex].dataset.translate;
+      const tgtLangCode = tgtSelect.options[tgtSelect.selectedIndex].dataset.translate;
+      const tgtSpeechLang = tgtSelect.value;
+      const translationContentEl = document.getElementById('translation-content');
+
+      const translated = await TranslationManager.translate(textToTranslate, srcLangCode, tgtLangCode);
+      this._pendingTranslations--;
+
+      // Skip if a newer translation has already completed
+      if (myId < this._translationId - 2) {
+        console.warn('Skipping stale translation:', textToTranslate.substring(0, 30));
+        return;
+      }
+
+      // Show translation
+      translationContentEl.classList.remove('panel__content--empty');
+      const span = document.createElement('span');
+      span.className = 'text-translated';
+      span.textContent = translated + ' ';
+
+      if (translationContentEl.textContent === '翻訳結果がここに表示されます') {
+        translationContentEl.innerHTML = '';
+      }
+      translationContentEl.appendChild(span);
+      translationContentEl.scrollTop = translationContentEl.scrollHeight;
+
+      // TTS
+      TTSManager.enqueue(translated, tgtSpeechLang);
+
+      // Log
+      LogManager.add(textToTranslate, translated, srcSelect.value, tgtSelect.value);
+
+      // Activate translation panel
+      document.getElementById('translation-panel').classList.add('panel--active');
+      setTimeout(() => {
+        document.getElementById('translation-panel').classList.remove('panel--active');
+      }, 2000);
     },
 
     onSpeechEnd() {
