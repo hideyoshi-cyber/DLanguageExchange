@@ -155,10 +155,26 @@
   <div class="modal-overlay" id="settings-modal">
     <div class="modal">
       <h2 class="modal__title">⚙️ 設定</h2>
-      <div class="modal__row"><span class="modal__label">翻訳API</span><span class="modal__value">MyMemory (Free)</span></div>
-      <div class="modal__row"><span class="modal__label">API使用量（本日）</span><span id="api-usage" class="modal__value">0 / 5,000 文字</span></div>
-      <div class="modal__row"><span class="modal__label">音声認識</span><span class="modal__value">Web Speech API</span></div>
-      <button class="modal__close" id="btn-close-settings">閉じる</button>
+      <div class="modal__row">
+        <span class="modal__label">翻訳API</span>
+        <select class="voice-select" id="translation-api-select">
+          <option value="mymemory">MyMemory (Free / 5,000文字/日)</option>
+          <option value="google">Google Cloud Translation (50万文字/月無料)</option>
+        </select>
+      </div>
+      <div class="modal__row hidden" id="google-api-key-row">
+        <span class="modal__label">Google APIキー</span>
+        <input type="password" class="api-key-input" id="google-api-key" placeholder="AIza...">
+      </div>
+      <div class="modal__row">
+        <span class="modal__label">API使用量</span>
+        <span id="api-usage" class="modal__value">0 / 5,000 文字</span>
+      </div>
+      <div class="modal__row">
+        <span class="modal__label">音声認識</span>
+        <span id="stt-engine-display" class="modal__value">Web Speech API</span>
+      </div>
+      <button class="modal__save" id="btn-save-settings">保存して閉じる</button>
     </div>
   </div>
 

@@ -36,41 +36,116 @@
   };
 
   // =====================
-  // Translation Manager
+  // Translation Manager (MyMemory + Google Cloud)
   // =====================
   const TranslationManager = {
     cache: new Map(),
     charCount: 0,
+    provider: 'mymemory', // 'mymemory' or 'google'
+    googleApiKey: '',
+
+    init() {
+      // Restore saved settings
+      const saved = localStorage.getItem('dlx_translation_config');
+      if (saved) {
+        try {
+          const config = JSON.parse(saved);
+          this.provider = config.provider || 'mymemory';
+          this.googleApiKey = config.googleApiKey || '';
+        } catch(e) {}
+      }
+
+      // Update settings UI
+      const apiSelect = document.getElementById('translation-api-select');
+      const keyRow = document.getElementById('google-api-key-row');
+      const keyInput = document.getElementById('google-api-key');
+      if (apiSelect) apiSelect.value = this.provider;
+      if (keyInput) keyInput.value = this.googleApiKey;
+      if (keyRow) keyRow.classList.toggle('hidden', this.provider !== 'google');
+
+      this.updateUsageDisplay();
+    },
+
+    saveConfig() {
+      localStorage.setItem('dlx_translation_config', JSON.stringify({
+        provider: this.provider,
+        googleApiKey: this.googleApiKey
+      }));
+    },
 
     async translate(text, sourceLang, targetLang) {
       if (!text.trim()) return '';
       const key = `${text}|${sourceLang}|${targetLang}`;
       if (this.cache.has(key)) return this.cache.get(key);
 
+      let translated;
+      if (this.provider === 'google' && this.googleApiKey) {
+        translated = await this._translateGoogle(text, sourceLang, targetLang);
+      } else {
+        translated = await this._translateMyMemory(text, sourceLang, targetLang);
+      }
+
+      if (translated && !translated.startsWith('[翻訳エラー]')) {
+        this.cache.set(key, translated);
+        this.charCount += text.length;
+        this.updateUsageDisplay();
+      }
+      return translated;
+    },
+
+    async _translateMyMemory(text, sourceLang, targetLang) {
       const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`;
       try {
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-
         if (data.responseStatus === 200 && data.responseData) {
-          const translated = data.responseData.translatedText;
-          this.cache.set(key, translated);
-          this.charCount += text.length;
-          this.updateUsageDisplay();
-          return translated;
+          return data.responseData.translatedText;
         }
         throw new Error(data.responseDetails || 'Translation failed');
       } catch (err) {
-        console.error('Translation error:', err);
+        console.error('MyMemory error:', err);
         Toast.show(`翻訳エラー: ${err.message}`, 'error');
         return `[翻訳エラー] ${text}`;
       }
     },
 
+    async _translateGoogle(text, sourceLang, targetLang) {
+      const url = `https://translation.googleapis.com/language/translate/v2?key=${this.googleApiKey}`;
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            q: text,
+            source: sourceLang,
+            target: targetLang,
+            format: 'text'
+          })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error?.message || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        return data.data.translations[0].translatedText;
+      } catch (err) {
+        console.error('Google Translation error:', err);
+        Toast.show(`Google翻訳エラー: ${err.message}`, 'error', 5000);
+        // Fallback to MyMemory
+        Toast.show('MyMemoryにフォールバックします', 'info');
+        return this._translateMyMemory(text, sourceLang, targetLang);
+      }
+    },
+
     updateUsageDisplay() {
       const el = document.getElementById('api-usage');
-      if (el) el.textContent = `${this.charCount.toLocaleString()} / 5,000 文字`;
+      if (!el) return;
+      if (this.provider === 'google') {
+        el.textContent = `${this.charCount.toLocaleString()} / 500,000 文字（月）`;
+      } else {
+        el.textContent = `${this.charCount.toLocaleString()} / 5,000 文字（日）`;
+      }
     }
   };
 
@@ -746,6 +821,7 @@
     init() {
       Toast.init();
       TTSManager.init();
+      TranslationManager.init();
       AudioLevel.init();
       LogManager.init();
 
@@ -828,9 +904,32 @@
       document.getElementById('btn-settings').addEventListener('click', () => {
         document.getElementById('settings-modal').classList.add('modal-overlay--visible');
       });
-      document.getElementById('btn-close-settings').addEventListener('click', () => {
-        document.getElementById('settings-modal').classList.remove('modal-overlay--visible');
+
+      // API selector toggle in settings
+      document.getElementById('translation-api-select').addEventListener('change', (e) => {
+        document.getElementById('google-api-key-row').classList.toggle('hidden', e.target.value !== 'google');
       });
+
+      // Save settings button
+      document.getElementById('btn-save-settings').addEventListener('click', () => {
+        const apiSelect = document.getElementById('translation-api-select');
+        const apiKey = document.getElementById('google-api-key').value.trim();
+
+        TranslationManager.provider = apiSelect.value;
+        TranslationManager.googleApiKey = apiKey;
+        TranslationManager.saveConfig();
+        TranslationManager.updateUsageDisplay();
+
+        // Validate Google API key
+        if (apiSelect.value === 'google' && !apiKey) {
+          Toast.show('Google APIキーを入力してください', 'error');
+          return;
+        }
+
+        document.getElementById('settings-modal').classList.remove('modal-overlay--visible');
+        Toast.show(`翻訳API: ${apiSelect.value === 'google' ? 'Google Cloud Translation' : 'MyMemory'} に設定しました`, 'info');
+      });
+
       document.getElementById('settings-modal').addEventListener('click', (e) => {
         if (e.target.classList.contains('modal-overlay')) {
           e.target.classList.remove('modal-overlay--visible');

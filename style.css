@@ -855,7 +855,8 @@ body {
   font-weight: 600;
 }
 
-.modal__close {
+.modal__close,
+.modal__save {
   margin-top: var(--space-lg);
   width: 100%;
   padding: 12px var(--space-md);
@@ -870,10 +871,35 @@ body {
   transition: all var(--transition-base);
 }
 
-.modal__close:hover {
+.modal__save {
   background: var(--blue);
   color: white;
   border-color: var(--blue);
+}
+
+.modal__close:hover,
+.modal__save:hover {
+  background: var(--blue);
+  color: white;
+  border-color: var(--blue);
+  opacity: 0.9;
+}
+
+.api-key-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: monospace;
+  font-size: 0.82rem;
+  transition: border-color var(--transition-base);
+}
+
+.api-key-input:focus {
+  border-color: var(--blue);
+  outline: none;
 }
 
 /* --- Browser Warning --- */
