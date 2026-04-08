@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DLanguageExchange — リアルタイム音声翻訳</title>
+  <meta name="description" content="講義やプレゼンの音声をリアルタイムで翻訳・読み上げするWebアプリ。日英韓対応。">
+  <meta name="theme-color" content="#0a0a0f">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="header">
+      <div class="header__brand">
+        <div class="header__icon">🌐</div>
+        <div>
+          <h1 class="header__title">DLanguageExchange</h1>
+          <p class="header__subtitle">Real-time Voice Translation</p>
+        </div>
+      </div>
+      <div class="header__actions">
+        <button class="btn-icon" id="btn-settings" title="設定">⚙️</button>
+      </div>
+    </header>
+
+    <div class="browser-warning hidden" id="browser-warning">
+      <span class="browser-warning__icon">⚠️</span>
+      <div><strong>非対応ブラウザです。</strong> 音声認識には <a href="https://www.google.com/chrome/" target="_blank">Chrome</a> またはEdgeを使用してください。</div>
+    </div>
+
+    <div class="language-selector">
+      <div class="lang-select-wrapper">
+        <label for="source-lang">入力言語 (Source)</label>
+        <select class="lang-select" id="source-lang">
+          <option value="ja-JP" data-translate="ja">🇯🇵 日本語</option>
+          <option value="en-US" data-translate="en">🇺🇸 English</option>
+          <option value="ko-KR" data-translate="ko">🇰🇷 한국어</option>
+          <option value="fr-FR" data-translate="fr">🇫🇷 Français</option>
+        </select>
+      </div>
+      <button class="lang-swap-btn" id="btn-swap" title="言語を入れ替え">⇄</button>
+      <div class="lang-select-wrapper">
+        <label for="target-lang">出力言語 (Target)</label>
+        <select class="lang-select" id="target-lang">
+          <option value="en-US" data-translate="en">🇺🇸 English</option>
+          <option value="ja-JP" data-translate="ja">🇯🇵 日本語</option>
+          <option value="ko-KR" data-translate="ko">🇰🇷 한국어</option>
+          <option value="fr-FR" data-translate="fr">🇫🇷 Français</option>
+        </select>
+      </div>
+    </div>
+
+    <section class="panel" id="source-panel">
+      <div class="panel__header">
+        <div class="panel__title"><span class="panel__title-dot" id="recognition-dot"></span>原文 (認識テキスト)</div>
+        <span class="panel__lang-badge" id="source-lang-badge">JA</span>
+      </div>
+      <div class="panel__content panel__content--empty" id="source-content">マイクボタンを押して話し始めてください</div>
+    </section>
+
+    <section class="panel" id="translation-panel">
+      <div class="panel__header">
+        <div class="panel__title"><span class="panel__title-dot" id="translation-dot"></span>翻訳テキスト</div>
+        <span class="panel__lang-badge" id="target-lang-badge">EN</span>
+      </div>
+      <div class="panel__content panel__content--empty" id="translation-content">翻訳結果がここに表示されます</div>
+      <div class="tts-status hidden" id="tts-status">
+        <span class="tts-status__icon">🔊</span>
+        <span id="tts-status-text">読み上げ中...</span>
+        <span class="tts-queue-count" id="tts-queue-count">0</span>
+      </div>
+    </section>
+
+    <div class="control-section">
+      <!-- Input Source Toggle -->
+      <div class="input-source-toggle" id="input-source-toggle">
+        <button class="source-btn source-btn--active" id="btn-source-mic" data-mode="mic" title="マイク入力">
+          <span>🎤</span> マイク
+        </button>
+        <button class="source-btn" id="btn-source-tab" data-mode="tab" title="ブラウザタブの音声をキャプチャ">
+          <span>🖥️</span> タブ音声
+        </button>
+      </div>
+      <button class="btn-main" id="btn-record"><span class="btn-main__icon">🎤</span><span id="btn-record-label">翻訳開始</span></button>
+      <div class="audio-level" id="audio-level">
+        <span class="audio-level__label">入力レベル</span>
+        <div class="audio-level__bars" id="audio-bars"></div>
+      </div>
+      <div class="control-settings">
+        <div class="setting-item">
+          <label for="speed-slider">読み上げ速度</label>
+          <input type="range" class="speed-slider" id="speed-slider" min="0.5" max="2.0" step="0.1" value="1.0">
+          <span class="speed-value" id="speed-value">1.0x</span>
+        </div>
+        <div class="setting-item">
+          <label>自動読み上げ</label>
+          <button class="btn-sm" id="auto-tts-toggle" data-active="true">ON</button>
+        </div>
+      </div>
+    </div>
+
+    <section class="log-section">
+      <div class="panel">
+        <div class="panel__header">
+          <div class="panel__title">📜 会話ログ</div>
+          <div class="log-actions">
+            <button class="btn-sm" id="btn-copy-log">📋 コピー</button>
+            <button class="btn-sm" id="btn-download-log">💾 保存</button>
+            <button class="btn-sm" id="btn-clear-log">🗑 クリア</button>
+          </div>
+        </div>
+        <div class="panel__content" id="log-content">
+          <div class="log-empty" id="log-empty">翻訳を開始するとログが表示されます</div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-overlay" id="settings-modal">
+    <div class="modal">
+      <h2 class="modal__title">⚙️ 設定</h2>
+      <div class="modal__row"><span class="modal__label">翻訳API</span><span class="modal__value">MyMemory (Free)</span></div>
+      <div class="modal__row"><span class="modal__label">API使用量（本日）</span><span id="api-usage" class="modal__value">0 / 5,000 文字</span></div>
+      <div class="modal__row"><span class="modal__label">音声認識</span><span class="modal__value">Web Speech API</span></div>
+      <button class="modal__close" id="btn-close-settings">閉じる</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"><span id="toast-text"></span></div>
+  <script src="app.js"></script>
+</body>
+</html>
