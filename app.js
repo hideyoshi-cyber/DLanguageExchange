@@ -45,13 +45,13 @@
     googleApiKey: 'AIzaSyCUkScfnzIg1qwScRQb8q0rZsQKteK2v1A',
 
     init() {
-      // Restore saved settings
+      // Restore saved settings (but keep embedded defaults as fallback)
       const saved = localStorage.getItem('dlx_translation_config');
       if (saved) {
         try {
           const config = JSON.parse(saved);
-          this.provider = config.provider || 'mymemory';
-          this.googleApiKey = config.googleApiKey || '';
+          if (config.provider) this.provider = config.provider;
+          if (config.googleApiKey) this.googleApiKey = config.googleApiKey;
         } catch(e) {}
       }
 
