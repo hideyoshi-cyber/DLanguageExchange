@@ -41,8 +41,8 @@
   const TranslationManager = {
     cache: new Map(),
     charCount: 0,
-    provider: 'mymemory', // 'mymemory' or 'google'
-    googleApiKey: '',
+    provider: 'google', // 'mymemory' or 'google'
+    googleApiKey: 'AIzaSyCUkScfnzIg1qwScRQb8q0rZsQKteK2v1A',
 
     init() {
       // Restore saved settings
