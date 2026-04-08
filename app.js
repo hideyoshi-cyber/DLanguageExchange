@@ -75,7 +75,7 @@
   };
 
   // =====================
-  // TTS Manager (Queue-based)
+  // TTS Manager (Queue-based + Auto Ducking)
   // =====================
   const TTSManager = {
     queue: [],
@@ -86,6 +86,7 @@
     statusEl: null,
     statusTextEl: null,
     queueCountEl: null,
+    MAX_QUEUE: 5, // Skip old items if queue gets too long
 
     init() {
       this.statusEl = document.getElementById('tts-status');
@@ -95,6 +96,11 @@
 
     enqueue(text, lang) {
       if (!this.autoPlay || !text.trim()) return;
+      // Drop oldest items if queue is overflowing (can't keep up)
+      while (this.queue.length >= this.MAX_QUEUE) {
+        const skipped = this.queue.shift();
+        console.warn('TTS queue overflow, skipping:', skipped.text.substring(0, 30));
+      }
       this.queue.push({ text, lang });
       this.updateUI();
       if (!this.isSpeaking) this.processNext();
@@ -103,6 +109,8 @@
     processNext() {
       if (this.queue.length === 0) {
         this.isSpeaking = false;
+        // Restore source audio volume (un-duck)
+        SpeechManager.setSourceVolume(1.0);
         this.updateUI();
         return;
       }
@@ -110,7 +118,9 @@
       const { text, lang } = this.queue.shift();
       this.updateUI();
 
-      // Cancel any ongoing speech
+      // AUTO-DUCK: Lower source audio while TTS speaks
+      SpeechManager.setSourceVolume(0.1);
+
       this.synthesis.cancel();
 
       const utterance = new SpeechSynthesisUtterance(text);
@@ -120,11 +130,11 @@
       utterance.volume = 1.0;
 
       utterance.onend = () => {
-        setTimeout(() => this.processNext(), 200);
+        setTimeout(() => this.processNext(), 150);
       };
       utterance.onerror = (e) => {
         console.error('TTS error:', e);
-        setTimeout(() => this.processNext(), 200);
+        setTimeout(() => this.processNext(), 150);
       };
 
       this.synthesis.speak(utterance);
@@ -134,6 +144,7 @@
       this.synthesis.cancel();
       this.queue = [];
       this.isSpeaking = false;
+      SpeechManager.setSourceVolume(1.0);
       this.updateUI();
     },
 
@@ -152,7 +163,7 @@
       const total = this.queue.length + (this.isSpeaking ? 1 : 0);
       if (total > 0) {
         this.statusEl.classList.remove('hidden');
-        this.statusTextEl.textContent = this.isSpeaking ? '読み上げ中...' : '待機中';
+        this.statusTextEl.textContent = this.isSpeaking ? '🔊 読み上げ中（元音声↓）' : '待機中';
         this.queueCountEl.textContent = `キュー: ${this.queue.length}`;
       } else {
         this.statusEl.classList.add('hidden');
@@ -361,19 +372,27 @@
           throw new Error('No audio track');
         }
 
-        // Play tab audio to user via AudioContext
+        // Play tab audio with volume control (gainNode for ducking)
         this.tabAudioContext = new (window.AudioContext || window.webkitAudioContext)();
         const source = this.tabAudioContext.createMediaStreamSource(this.tabStream);
-        source.connect(this.tabAudioContext.destination);
+        this.tabGainNode = this.tabAudioContext.createGain();
+        this.tabGainNode.gain.value = 0.5; // Start at 50% to not overpower TTS
+        source.connect(this.tabGainNode);
+        this.tabGainNode.connect(this.tabAudioContext.destination);
+
+        // Update volume slider
+        const volSlider = document.getElementById('source-volume');
+        if (volSlider) volSlider.value = 0.5;
+        const volVal = document.getElementById('source-volume-value');
+        if (volVal) volVal.textContent = '50%';
 
         // Visualize audio level
         AudioLevel.connectStream(this.tabStream);
 
-        // Start speech recognition (listens to default mic)
-        // For tab audio STT, user should route tab output -> virtual mic
+        // Start speech recognition
         this._startRecognition();
 
-        Toast.show('タブ音声をキャプチャ中。音声認識にはシステムのステレオミキサーまたはVB-Cableを既定のマイクに設定してください。', 'info', 6000);
+        Toast.show('タブ音声をキャプチャ中。TTS発話時は元音声が自動で下がります。', 'info', 4000);
       } catch (err) {
         if (err.name === 'NotAllowedError') {
           Toast.show('タブ共有がキャンセルされました', 'info');
@@ -382,6 +401,13 @@
         }
         this.stopTabCapture();
         throw err;
+      }
+    },
+
+    // Volume control for source audio (used by auto-ducking)
+    setSourceVolume(vol) {
+      if (this.tabGainNode) {
+        this.tabGainNode.gain.setTargetAtTime(vol, this.tabAudioContext.currentTime, 0.1);
       }
     },
 
@@ -411,6 +437,7 @@
         try { this.tabAudioContext.close(); } catch(e){}
         this.tabAudioContext = null;
       }
+      this.tabGainNode = null;
     },
 
     setHandlers(onResult, onEnd, onError) {
@@ -482,6 +509,15 @@
       // Language selectors
       document.getElementById('source-lang').addEventListener('change', () => this.updateBadges());
       document.getElementById('target-lang').addEventListener('change', () => this.updateBadges());
+
+      // Source volume slider (for tab audio ducking)
+      const srcVolSlider = document.getElementById('source-volume');
+      const srcVolValue = document.getElementById('source-volume-value');
+      srcVolSlider.addEventListener('input', () => {
+        const val = parseFloat(srcVolSlider.value);
+        srcVolValue.textContent = `${Math.round(val * 100)}%`;
+        SpeechManager.setSourceVolume(val);
+      });
 
       // Speed slider
       const speedSlider = document.getElementById('speed-slider');
