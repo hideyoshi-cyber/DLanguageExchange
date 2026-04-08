@@ -322,13 +322,160 @@
   };
 
   // =====================
+  // Whisper Manager (In-Browser STT)
+  // =====================
+  const WhisperManager = {
+    transcriber: null,
+    isLoading: false,
+    isReady: false,
+    captureContext: null,
+    processor: null,
+    audioBuffer: [],
+    chunkInterval: null,
+    CHUNK_SECONDS: 5,
+    onTranscript: null,
+    currentLang: 'en-US',
+
+    // Whisper language codes
+    LANG_MAP: {
+      'ja-JP': 'japanese',
+      'en-US': 'english',
+      'ko-KR': 'korean',
+      'fr-FR': 'french'
+    },
+
+    async load(onProgress) {
+      if (this.isReady || this.isLoading) return;
+      this.isLoading = true;
+
+      try {
+        const { pipeline } = await import(
+          'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3'
+        );
+
+        // Prefer WebGPU, fallback to WASM
+        let device = 'wasm';
+        let dtype = 'fp32';
+        if (navigator.gpu) {
+          try {
+            const adapter = await navigator.gpu.requestAdapter();
+            if (adapter) { device = 'webgpu'; dtype = 'fp32'; }
+          } catch (e) { /* fallback to wasm */ }
+        }
+
+        Toast.show(`Whisperモデルを読み込み中 (${device.toUpperCase()})...`, 'info', 10000);
+
+        this.transcriber = await pipeline(
+          'automatic-speech-recognition',
+          'onnx-community/whisper-tiny',
+          { dtype, device, progress_callback: onProgress }
+        );
+
+        this.isReady = true;
+        Toast.show('✅ Whisperモデル準備完了！', 'info', 3000);
+      } catch (err) {
+        console.error('Whisper load error:', err);
+        Toast.show(`Whisperの読み込みに失敗: ${err.message}`, 'error', 5000);
+        throw err;
+      } finally {
+        this.isLoading = false;
+      }
+    },
+
+    startCapture(stream, language, onTranscript) {
+      this.onTranscript = onTranscript;
+      this.currentLang = language;
+      this.audioBuffer = [];
+
+      // Create AudioContext at 16kHz for Whisper input
+      this.captureContext = new AudioContext({ sampleRate: 16000 });
+      const source = this.captureContext.createMediaStreamSource(stream);
+
+      // ScriptProcessor to capture raw PCM at 16kHz
+      this.processor = this.captureContext.createScriptProcessor(4096, 1, 1);
+      this.processor.onaudioprocess = (e) => {
+        const samples = e.inputBuffer.getChannelData(0);
+        this.audioBuffer.push(new Float32Array(samples));
+      };
+      source.connect(this.processor);
+      this.processor.connect(this.captureContext.destination);
+
+      // Process every CHUNK_SECONDS
+      this.chunkInterval = setInterval(() => {
+        this._processChunk();
+      }, this.CHUNK_SECONDS * 1000);
+    },
+
+    async _processChunk() {
+      if (this.audioBuffer.length === 0 || !this.isReady) return;
+
+      // Merge buffered samples
+      const totalLen = this.audioBuffer.reduce((a, b) => a + b.length, 0);
+      const merged = new Float32Array(totalLen);
+      let off = 0;
+      for (const buf of this.audioBuffer) {
+        merged.set(buf, off);
+        off += buf.length;
+      }
+      this.audioBuffer = [];
+
+      // Skip silent chunks (RMS < threshold)
+      const rms = Math.sqrt(merged.reduce((acc, v) => acc + v * v, 0) / merged.length);
+      if (rms < 0.008) return;
+
+      try {
+        const result = await this.transcriber(merged, {
+          language: this.LANG_MAP[this.currentLang] || 'english',
+          task: 'transcribe'
+        });
+
+        if (result && result.text && result.text.trim()) {
+          // Filter out hallucination patterns
+          const text = result.text.trim();
+          if (text.length > 2 && !text.match(/^[\.\,\!\?\s]+$/)) {
+            this.onTranscript(text);
+          }
+        }
+      } catch (err) {
+        console.error('Whisper chunk error:', err);
+      }
+    },
+
+    setLanguage(lang) {
+      this.currentLang = lang;
+    },
+
+    stop() {
+      if (this.chunkInterval) {
+        clearInterval(this.chunkInterval);
+        this.chunkInterval = null;
+      }
+      // Process remaining buffer
+      if (this.audioBuffer.length > 0 && this.isReady) {
+        this._processChunk();
+      }
+      if (this.processor) {
+        this.processor.disconnect();
+        this.processor = null;
+      }
+      if (this.captureContext) {
+        try { this.captureContext.close(); } catch(e) {}
+        this.captureContext = null;
+      }
+      this.audioBuffer = [];
+    }
+  };
+
+  // =====================
   // Speech Recognition Manager
   // =====================
   const SpeechManager = {
     recognition: null,
     isListening: false,
     inputMode: 'mic', // 'mic' or 'tab'
+    engine: 'native', // 'native' or 'whisper'
     tabStream: null,
+    micStream: null,
     tabAudioContext: null,
 
     init() {
@@ -348,9 +495,17 @@
     async startMic() {
       this.inputMode = 'mic';
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        AudioLevel.connectStream(stream);
-        this._startRecognition();
+        this.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        AudioLevel.connectStream(this.micStream);
+
+        if (this.engine === 'whisper') {
+          const srcLang = document.getElementById('source-lang').value;
+          WhisperManager.startCapture(this.micStream, srcLang, (text) => {
+            App.onWhisperResult(text);
+          });
+        } else {
+          this._startRecognition();
+        }
       } catch (err) {
         Toast.show('マイクへのアクセスが拒否されました', 'error');
         throw err;
@@ -389,10 +544,17 @@
         // Visualize audio level
         AudioLevel.connectStream(this.tabStream);
 
-        // Start speech recognition
-        this._startRecognition();
-
-        Toast.show('タブ音声をキャプチャ中。TTS発話時は元音声が自動で下がります。', 'info', 4000);
+        // Start recognition (native or Whisper)
+        if (this.engine === 'whisper') {
+          const srcLang = document.getElementById('source-lang').value;
+          WhisperManager.startCapture(this.tabStream, srcLang, (text) => {
+            App.onWhisperResult(text);
+          });
+          Toast.show('タブ音声をWhisperで高精度認識中。VB-Cable不要です！', 'info', 4000);
+        } else {
+          this._startRecognition();
+          Toast.show('タブ音声をキャプチャ中。TTS発話時は元音声が自動で下がります。', 'info', 4000);
+        }
       } catch (err) {
         if (err.name === 'NotAllowedError') {
           Toast.show('タブ共有がキャンセルされました', 'info');
@@ -442,7 +604,12 @@
         this.recognition.stop();
         this.isListening = false;
       }
+      WhisperManager.stop();
       this.stopTabCapture();
+      if (this.micStream) {
+        this.micStream.getTracks().forEach(t => t.stop());
+        this.micStream = null;
+      }
       AudioLevel.disconnect();
     },
 
@@ -498,6 +665,7 @@
     isActive: false,
     sourceText: '',
     inputMode: 'mic', // 'mic' or 'tab'
+    sttEngine: 'native', // 'native' or 'whisper'
 
     init() {
       Toast.init();
@@ -527,6 +695,10 @@
       // Language selectors
       document.getElementById('source-lang').addEventListener('change', () => this.updateBadges());
       document.getElementById('target-lang').addEventListener('change', () => this.updateBadges());
+
+      // Engine toggle
+      document.getElementById('btn-engine-native').addEventListener('click', () => this.setEngine('native'));
+      document.getElementById('btn-engine-whisper').addEventListener('click', () => this.setEngine('whisper'));
 
       // Source volume slider (for tab audio)
       const srcVolSlider = document.getElementById('source-volume');
@@ -613,6 +785,11 @@
 
     async startRecording(mode = 'mic') {
       try {
+        // If Whisper engine selected, ensure model is loaded first
+        if (this.sttEngine === 'whisper' && !WhisperManager.isReady) {
+          await this.loadWhisperModel();
+        }
+
         if (mode === 'tab') {
           await SpeechManager.startTabCapture();
         } else {
@@ -623,7 +800,8 @@
         this.updateRecordingUI(true);
 
         const modeLabel = mode === 'tab' ? 'タブ音声' : 'マイク';
-        Toast.show(`${modeLabel}で翻訳を開始しました`, 'info');
+        const engineLabel = this.sttEngine === 'whisper' ? ' (Whisper高精度)' : '';
+        Toast.show(`${modeLabel}${engineLabel}で翻訳を開始しました`, 'info');
       } catch (err) {
         this.isActive = false;
         this.updateRecordingUI(false);
@@ -637,6 +815,110 @@
       this.sourceText = '';
       this.updateRecordingUI(false);
       Toast.show('翻訳を停止しました', 'info');
+    },
+
+    // Engine toggle
+    setEngine(engine) {
+      this.sttEngine = engine;
+      SpeechManager.engine = engine;
+
+      // Update UI
+      document.querySelectorAll('#engine-toggle .source-btn').forEach(btn => {
+        btn.classList.toggle('source-btn--active', btn.dataset.engine === engine);
+      });
+
+      // If switching to Whisper, preload model
+      if (engine === 'whisper' && !WhisperManager.isReady && !WhisperManager.isLoading) {
+        this.loadWhisperModel();
+      }
+
+      // Restart if currently recording
+      if (this.isActive) {
+        this.stopRecording();
+        setTimeout(() => this.startRecording(this.inputMode), 300);
+      }
+    },
+
+    async loadWhisperModel() {
+      const progressEl = document.getElementById('whisper-progress');
+      const labelEl = document.getElementById('whisper-progress-label');
+      const fillEl = document.getElementById('whisper-progress-fill');
+
+      progressEl.classList.remove('hidden');
+      labelEl.textContent = 'Whisperモデルをダウンロード中...';
+      fillEl.style.width = '0%';
+
+      try {
+        await WhisperManager.load((progress) => {
+          if (progress.status === 'progress' && progress.total) {
+            const pct = Math.round((progress.loaded / progress.total) * 100);
+            fillEl.style.width = `${pct}%`;
+            const mb = (progress.loaded / 1024 / 1024).toFixed(1);
+            const totalMb = (progress.total / 1024 / 1024).toFixed(1);
+            labelEl.textContent = `モデルダウンロード中... ${mb}MB / ${totalMb}MB`;
+          } else if (progress.status === 'ready') {
+            fillEl.style.width = '100%';
+            labelEl.textContent = '✅ Whisper準備完了！';
+          }
+        });
+        setTimeout(() => progressEl.classList.add('hidden'), 2000);
+      } catch (err) {
+        labelEl.textContent = '❌ 読み込みに失敗しました';
+        setTimeout(() => progressEl.classList.add('hidden'), 3000);
+        // Revert to native engine
+        this.setEngine('native');
+      }
+    },
+
+    // Whisper result handler (called from WhisperManager via SpeechManager)
+    onWhisperResult(text) {
+      if (!this.isActive) return;
+
+      const sourceContentEl = document.getElementById('source-content');
+      sourceContentEl.classList.remove('panel__content--empty');
+
+      // Append to source text display
+      this.sourceText += text + ' ';
+      sourceContentEl.innerHTML = `<span class="text-final">${this.escapeHtml(this.sourceText)}</span>`;
+      sourceContentEl.scrollTop = sourceContentEl.scrollHeight;
+
+      // Translate (direct, no debounce needed since Whisper already batches)
+      this._flushWhisperTranslation(text);
+    },
+
+    async _flushWhisperTranslation(text) {
+      const srcSelect = document.getElementById('source-lang');
+      const tgtSelect = document.getElementById('target-lang');
+      const srcLangCode = srcSelect.options[srcSelect.selectedIndex].dataset.translate;
+      const tgtLangCode = tgtSelect.options[tgtSelect.selectedIndex].dataset.translate;
+      const tgtSpeechLang = tgtSelect.value;
+      const translationContentEl = document.getElementById('translation-content');
+
+      const translated = await TranslationManager.translate(text, srcLangCode, tgtLangCode);
+
+      // Show translation
+      translationContentEl.classList.remove('panel__content--empty');
+      const span = document.createElement('span');
+      span.className = 'text-translated';
+      span.textContent = translated + ' ';
+
+      if (translationContentEl.textContent === '翻訳結果がここに表示されます') {
+        translationContentEl.innerHTML = '';
+      }
+      translationContentEl.appendChild(span);
+      translationContentEl.scrollTop = translationContentEl.scrollHeight;
+
+      // TTS
+      TTSManager.enqueue(translated, tgtSpeechLang);
+
+      // Log
+      LogManager.add(text, translated, srcSelect.value, tgtSelect.value);
+
+      // Activate translation panel
+      document.getElementById('translation-panel').classList.add('panel--active');
+      setTimeout(() => {
+        document.getElementById('translation-panel').classList.remove('panel--active');
+      }, 2000);
     },
 
     // Translation request counter to skip stale results

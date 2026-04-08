@@ -406,6 +406,57 @@ body {
   padding: var(--space-lg) 0;
 }
 
+/* Engine Selector */
+.engine-selector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.engine-label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+}
+
+/* Whisper Progress Bar */
+.whisper-progress {
+  width: 100%;
+  max-width: 400px;
+  padding: var(--space-md);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow);
+  animation: fadeIn 0.3s ease;
+}
+
+.whisper-progress__label {
+  font-size: 0.78rem;
+  color: var(--blue);
+  font-weight: 600;
+  margin-bottom: var(--space-sm);
+  text-align: center;
+}
+
+.whisper-progress__bar {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.whisper-progress__fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue), var(--teal));
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
 /* Input Source Toggle */
 .input-source-toggle {
   display: inline-flex;

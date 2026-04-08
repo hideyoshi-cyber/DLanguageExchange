@@ -73,6 +73,25 @@
     </section>
 
     <div class="control-section">
+      <!-- STT Engine Selector -->
+      <div class="engine-selector">
+        <label class="engine-label">認識エンジン</label>
+        <div class="input-source-toggle" id="engine-toggle">
+          <button class="source-btn source-btn--active" id="btn-engine-native" data-engine="native">
+            🟢 標準
+          </button>
+          <button class="source-btn" id="btn-engine-whisper" data-engine="whisper">
+            🔵 高精度 (Whisper)
+          </button>
+        </div>
+      </div>
+      <!-- Whisper Loading Progress -->
+      <div class="whisper-progress hidden" id="whisper-progress">
+        <div class="whisper-progress__label" id="whisper-progress-label">Whisperモデル読み込み中...</div>
+        <div class="whisper-progress__bar">
+          <div class="whisper-progress__fill" id="whisper-progress-fill" style="width: 0%"></div>
+        </div>
+      </div>
       <!-- Input Source Toggle -->
       <div class="input-source-toggle" id="input-source-toggle">
         <button class="source-btn source-btn--active" id="btn-source-mic" data-mode="mic" title="マイク入力">
