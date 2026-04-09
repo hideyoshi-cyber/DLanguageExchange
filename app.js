@@ -444,14 +444,21 @@
       }
     },
 
-    toText() {
+    toText(format = 'all') {
+      if (format === 'translation') {
+        return this.entries.map(e => e.translatedText).join('\n');
+      } else if (format === 'source') {
+        return this.entries.map(e => e.sourceText).join('\n');
+      }
       return this.entries.map(e =>
         `[${e.time}] [${LANGUAGES[e.sourceLang]?.badge}] ${e.sourceText}\n         [${LANGUAGES[e.targetLang]?.badge}] ${e.translatedText}`
       ).join('\n\n');
     },
 
     copyToClipboard() {
-      const text = this.toText();
+      const formatDropdown = document.getElementById('download-format');
+      const format = formatDropdown ? formatDropdown.value : 'all';
+      const text = this.toText(format);
       if (!text) { Toast.show('ログが空です', 'info'); return; }
       navigator.clipboard.writeText(text).then(() => {
         Toast.show('ログをコピーしました', 'info');
@@ -459,13 +466,20 @@
     },
 
     download() {
-      const text = this.toText();
+      const formatDropdown = document.getElementById('download-format');
+      const format = formatDropdown ? formatDropdown.value : 'all';
+      const text = this.toText(format);
       if (!text) { Toast.show('ログが空です', 'info'); return; }
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `translation_log_${new Date().toISOString().slice(0, 10)}.txt`;
+
+      let suffix = '';
+      if (format === 'translation') suffix = '_translation';
+      if (format === 'source') suffix = '_source';
+
+      a.download = `log_${new Date().toISOString().slice(0, 10)}${suffix}.txt`;
       a.click();
       URL.revokeObjectURL(url);
       Toast.show('ログを保存しました', 'info');

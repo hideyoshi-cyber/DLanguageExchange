@@ -141,7 +141,12 @@
           <div class="panel__title">📜 会話ログ</div>
           <div class="log-actions">
             <button class="btn-sm" id="btn-copy-log">📋 コピー</button>
-            <button class="btn-sm" id="btn-download-log">💾 保存</button>
+            <select class="btn-sm" id="download-format" style="padding-right: 25px;">
+              <option value="all">💾 対訳 (すべて)</option>
+              <option value="translation">📝 翻訳テキストのみ</option>
+              <option value="source">🗣️ 原文テキストのみ</option>
+            </select>
+            <button class="btn-sm" id="btn-download-log">保存</button>
             <button class="btn-sm" id="btn-clear-log">🗑 クリア</button>
           </div>
         </div>
