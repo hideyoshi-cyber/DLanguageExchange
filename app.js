@@ -1116,11 +1116,73 @@
     _batchBuffer: '',
     _batchTimer: null,
 
+    // Anti-loop protection
+    _recentTexts: [],       // last N recognized texts
+    _loopCooldown: false,   // true during cooldown after loop detected
+    _lastFinalText: '',     // last recognized final text
+
+    // Check if text is a repetition / loop
+    _isLoopDetected(text) {
+      const normalized = text.trim().toLowerCase();
+      if (!normalized || normalized.length < 2) return true; // noise
+
+      // Skip exact duplicate of last text
+      if (normalized === this._lastFinalText.trim().toLowerCase()) {
+        console.warn('Loop guard: exact duplicate skipped:', text.substring(0, 30));
+        return true;
+      }
+
+      // Track recent texts (keep last 5)
+      this._recentTexts.push(normalized);
+      if (this._recentTexts.length > 5) this._recentTexts.shift();
+
+      // Check for repeating pattern (3+ of same text in last 5)
+      const counts = {};
+      for (const t of this._recentTexts) {
+        counts[t] = (counts[t] || 0) + 1;
+        if (counts[t] >= 3) {
+          console.warn('Loop guard: pattern detected, entering cooldown:', t.substring(0, 30));
+          this._loopCooldown = true;
+          this._recentTexts = [];
+          // Cool down for 3 seconds
+          setTimeout(() => {
+            this._loopCooldown = false;
+            console.log('Loop guard: cooldown ended');
+          }, 3000);
+          return true;
+        }
+      }
+
+      // Check similarity with last text (catches slight variations from music)
+      if (this._lastFinalText && this._similarity(normalized, this._lastFinalText.trim().toLowerCase()) > 0.8) {
+        console.warn('Loop guard: similar text skipped:', text.substring(0, 30));
+        return true;
+      }
+
+      return false;
+    },
+
+    // Simple similarity ratio (0-1)
+    _similarity(a, b) {
+      if (a === b) return 1;
+      if (!a || !b) return 0;
+      const longer = a.length > b.length ? a : b;
+      const shorter = a.length > b.length ? b : a;
+      if (longer.length === 0) return 1;
+      // Check if one contains the other
+      if (longer.includes(shorter)) return shorter.length / longer.length;
+      // Character overlap
+      let matches = 0;
+      for (let i = 0; i < shorter.length; i++) {
+        if (longer.includes(shorter[i])) matches++;
+      }
+      return matches / longer.length;
+    },
+
     async onSpeechResult(finalText, interim) {
       const sourceContentEl = document.getElementById('source-content');
-      const translationContentEl = document.getElementById('translation-content');
 
-      // Show source text
+      // Show source text (always show interim for responsiveness)
       sourceContentEl.classList.remove('panel__content--empty');
       let html = '';
       if (this.sourceText) {
@@ -1135,13 +1197,24 @@
       sourceContentEl.innerHTML = html;
       sourceContentEl.scrollTop = sourceContentEl.scrollHeight;
 
-      // Batch final texts and translate with debounce
+      // Process final text with anti-loop protection
       if (finalText.trim()) {
+        // Skip if in cooldown from loop detection
+        if (this._loopCooldown) {
+          console.warn('Loop guard: in cooldown, skipping:', finalText.substring(0, 30));
+          return;
+        }
+
+        // Skip if loop/duplicate detected
+        if (this._isLoopDetected(finalText)) {
+          return;
+        }
+
+        this._lastFinalText = finalText;
         this.sourceText += finalText + ' ';
         this._batchBuffer += finalText.trim() + ' ';
 
         // Debounce: wait 400ms for more text before translating
-        // This batches rapid-fire recognition results
         clearTimeout(this._batchTimer);
         this._batchTimer = setTimeout(() => this._flushTranslation(), 400);
       }
@@ -1151,6 +1224,12 @@
       const textToTranslate = this._batchBuffer.trim();
       this._batchBuffer = '';
       if (!textToTranslate) return;
+
+      // Skip very short text (likely music noise)
+      if (textToTranslate.length < 3) {
+        console.warn('Noise filter: text too short, skipping:', textToTranslate);
+        return;
+      }
 
       const myId = ++this._translationId;
       this._pendingTranslations++;
