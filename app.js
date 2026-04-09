@@ -153,28 +153,54 @@
   // TTS Manager (Queue-based + Auto Ducking)
   // =====================
   const TTSManager = {
+    synthesis: window.speechSynthesis,
+    voices: [],
+    selectedVoice: null,
     queue: [],
     isSpeaking: false,
+    autoPlay: true,
+    MAX_QUEUE: 10,
     speed: 1.0,
     pitch: 1.0,
-    autoPlay: true,
-    synthesis: window.speechSynthesis,
-    selectedVoice: null,
-    voices: [],
-    statusEl: null,
-    statusTextEl: null,
-    queueCountEl: null,
-    MAX_QUEUE: 3,
+
+    // ElevenLabs properties
+    engine: 'native', // 'native' or 'elevenlabs'
+    elevenLabsApiKey: '',
 
     init() {
       this.statusEl = document.getElementById('tts-status');
       this.statusTextEl = document.getElementById('tts-status-text');
       this.queueCountEl = document.getElementById('tts-queue-count');
 
+      // Restore saved TTS settings
+      const saved = localStorage.getItem('dlx_tts_config');
+      if (saved) {
+        try {
+          const cfg = JSON.parse(saved);
+          if (cfg.engine) this.engine = cfg.engine;
+          if (cfg.elevenLabsApiKey !== undefined) this.elevenLabsApiKey = cfg.elevenLabsApiKey;
+        } catch(e){}
+      }
+
+      // Restore UI
+      const ttsSelect = document.getElementById('tts-engine-select');
+      const keyRow = document.getElementById('elevenlabs-api-key-row');
+      const keyInput = document.getElementById('elevenlabs-api-key');
+      if (ttsSelect) ttsSelect.value = this.engine;
+      if (keyInput) keyInput.value = this.elevenLabsApiKey;
+      if (keyRow) keyRow.classList.toggle('hidden', this.engine !== 'elevenlabs');
+
       // Load available voices
       this._loadVoices();
       // Chrome needs onvoiceschanged
       this.synthesis.onvoiceschanged = () => this._loadVoices();
+    },
+
+    saveConfig() {
+      localStorage.setItem('dlx_tts_config', JSON.stringify({
+        engine: this.engine,
+        elevenLabsApiKey: this.elevenLabsApiKey
+      }));
     },
 
     _loadVoices() {
@@ -257,7 +283,7 @@
       if (!this.isSpeaking) this.processNext();
     },
 
-    processNext() {
+    async processNext() {
       if (this.queue.length === 0) {
         this.isSpeaking = false;
         SpeechManager.restoreUserVolume();
@@ -271,6 +297,21 @@
       SpeechManager.duckVolume();
       this.synthesis.cancel();
 
+      if (this.engine === 'elevenlabs' && this.elevenLabsApiKey) {
+        try {
+          await this._playElevenLabs(text, lang);
+          setTimeout(() => this.processNext(), 100);
+          return;
+        } catch (e) {
+          console.error('ElevenLabs playback failed, falling back to Native TTS:', e);
+          // Fall through to native TTS
+        }
+      }
+
+      this._playNative(text, lang);
+    },
+
+    _playNative(text, lang) {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = lang;
       utterance.rate = this.speed;
@@ -290,6 +331,52 @@
       };
 
       this.synthesis.speak(utterance);
+    },
+
+    _playElevenLabs(text, lang) {
+      return new Promise(async (resolve, reject) => {
+        try {
+          // Rachel voice ID
+          const voiceId = '21m00Tcm4TlvDq8ikWAM';
+          const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`;
+          
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'xi-api-key': this.elevenLabsApiKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              text: text,
+              model_id: "eleven_multilingual_v2",
+              voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+            })
+          });
+
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail?.message || 'ElevenLabs API Error');
+          }
+
+          const blob = await response.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          const audio = new Audio(objectUrl);
+          audio.playbackRate = this.speed; // Support speed adjustment
+          
+          audio.onended = () => {
+            URL.revokeObjectURL(objectUrl);
+            resolve();
+          };
+          audio.onerror = (e) => {
+            URL.revokeObjectURL(objectUrl);
+            reject(new Error('Audio playback failed'));
+          };
+          
+          audio.play();
+        } catch (e) {
+          reject(e);
+        }
+      });
     },
 
     stop() {
@@ -924,24 +1011,42 @@
         document.getElementById('google-api-key-row').classList.toggle('hidden', e.target.value !== 'google');
       });
 
+      // TTS selector toggle in settings
+      document.getElementById('tts-engine-select').addEventListener('change', (e) => {
+        document.getElementById('elevenlabs-api-key-row').classList.toggle('hidden', e.target.value !== 'elevenlabs');
+      });
+
       // Save settings button
       document.getElementById('btn-save-settings').addEventListener('click', () => {
+        // Translation API Settings
         const apiSelect = document.getElementById('translation-api-select');
         const apiKey = document.getElementById('google-api-key').value.trim();
-
         TranslationManager.provider = apiSelect.value;
         TranslationManager.googleApiKey = apiKey;
         TranslationManager.saveConfig();
         TranslationManager.updateUsageDisplay();
 
-        // Validate Google API key
+        // TTS Engine Settings
+        const ttsSelect = document.getElementById('tts-engine-select');
+        const ttsKey = document.getElementById('elevenlabs-api-key').value.trim();
+        TTSManager.engine = ttsSelect.value;
+        TTSManager.elevenLabsApiKey = ttsKey;
+        TTSManager.saveConfig();
+
+        // Validation
         if (apiSelect.value === 'google' && !apiKey) {
           Toast.show('Google APIキーを入力してください', 'error');
           return;
         }
+        if (ttsSelect.value === 'elevenlabs' && !ttsKey) {
+          Toast.show('ElevenLabs APIキーを入力してください', 'error');
+          return;
+        }
 
         document.getElementById('settings-modal').classList.remove('modal-overlay--visible');
-        Toast.show(`翻訳API: ${apiSelect.value === 'google' ? 'Google Cloud Translation' : 'MyMemory'} に設定しました`, 'info');
+        
+        let msg = `翻訳: ${apiSelect.value === 'google' ? 'Google' : 'MyMemory'} / 音声: ${ttsSelect.value === 'elevenlabs' ? 'ElevenLabs' : '内蔵TTS'} に設定しました`;
+        Toast.show(msg, 'info');
       });
 
       document.getElementById('settings-modal').addEventListener('click', (e) => {

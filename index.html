@@ -176,6 +176,17 @@
         <span id="api-usage" class="modal__value">0 / 5,000 文字</span>
       </div>
       <div class="modal__row">
+        <span class="modal__label">音声エンジン(TTS)</span>
+        <select class="voice-select" id="tts-engine-select">
+          <option value="native">ブラウザ内蔵 (無料)</option>
+          <option value="elevenlabs">ElevenLabs (超高音質 / 要APIキー)</option>
+        </select>
+      </div>
+      <div class="modal__row hidden" id="elevenlabs-api-key-row">
+        <span class="modal__label">ElevenLabs API</span>
+        <input type="password" class="api-key-input" id="elevenlabs-api-key" placeholder="sk_...">
+      </div>
+      <div class="modal__row">
         <span class="modal__label">音声認識</span>
         <span id="stt-engine-display" class="modal__value">Web Speech API</span>
       </div>
