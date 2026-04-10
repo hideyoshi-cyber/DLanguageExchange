@@ -42,7 +42,7 @@
     cache: new Map(),
     charCount: 0,
     provider: 'google', // 'mymemory' or 'google'
-    googleApiKey: 'AIzaSyCUkScfnzIg1qwScRQb8q0rZsQKteK2v1A',
+    googleApiKey: '',
 
     init() {
       // Restore saved settings (but keep embedded defaults as fallback)
